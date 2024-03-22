@@ -1,0 +1,160 @@
+from math import exp
+import matplotlib.pyplot as plt
+import numpy as np
+from dataclasses import dataclass
+import matplotlib.patches as mpatches
+
+@dataclass
+class MertonPortfolioQlearning:
+    mu: float
+    sigma: float
+    r: float
+    rho: float
+    horizon: float
+    gamma: float
+    epsilon: float = 1e-6
+    num_actions: int = 2
+
+    Q: np.ndarray = None  # Initialize Q as None
+
+    def __post_init__(self):
+        if self.Q is None:
+            self.Q = np.zeros((int(self.horizon) + 1, int(self.horizon) + 1, self.num_actions))
+
+    def excess(self):
+        return self.mu - self.r
+
+    def variance(self):
+        return self.sigma * self.sigma
+
+    def allocation(self, action):
+        return action / (self.gamma * self.variance())
+
+    def portfolio_return(self, action):
+        return self.r + self.allocation(action) * self.excess()
+
+    def nu(self, action):
+        return (self.rho - (1 - self.gamma) * self.portfolio_return(action)) / self.gamma
+
+    def f(self, time, action):
+        remaining = self.horizon - time
+        nu = self.nu(action)
+        if nu == 0:
+            ret = remaining + self.epsilon
+        else:
+            ret = (1 + (nu * self.epsilon - 1) * exp(-nu * remaining)) / nu
+        return ret
+
+    def discretize_state(self, time, wealth_growth):
+        state_time = int(time / self.horizon * int(self.horizon) + 0.5)
+        state_wealth_growth = int(wealth_growth + 0.5)
+        return state_time, state_wealth_growth
+
+    def discretize_action(self, action):
+        return int(action)
+
+    def fractional_consumption_rate(self, time, action):
+        return 1 / self.f(time, action)
+
+    def wealth_growth_rate(self, time, action):
+        return self.portfolio_return(action) - self.fractional_consumption_rate(time, action)
+
+    def expected_wealth(self, time, action):
+        base = np.exp(self.portfolio_return(action) * time)
+        nu = self.nu(action)
+        if nu == 0:
+            ret = base * (1 - time / (self.horizon + self.epsilon))
+        else:
+            ret = base * (1 - (1 - exp(-nu * time)) / (1 + (nu * self.epsilon - 1) * exp(-nu * self.horizon)))
+        return ret
+
+
+
+
+    def q_learning(self, num_episodes=1000, alpha=0.01, rho=0.99, epsilon=0.1):
+        rewards_per_episode = []
+        actions_taken_per_episode = []
+
+        for episode in range(num_episodes):
+            state = (0, 1)  # start from time 0 and wealth growth 1
+            total_reward = 0
+            actions_taken = []
+            for _ in range(int(self.horizon)):
+                # Choose action using epsilon-greedy policy
+                if np.random.rand() < epsilon:
+                    action = np.random.choice(self.num_actions)
+                else:
+                    action_index = self.discretize_action(np.argmax(self.Q[state[0], state[1], :]))
+                    action = action_index
+                    actions_taken.append(action)
+                # Update state
+                state_prime = self.discretize_state(state[0] + 1, self.wealth_growth_rate(state[0], action))
+
+                # Calculate reward as negative of fractional consumption rate
+                reward = -(self.fractional_consumption_rate(state[0], action)**(1 - self.gamma)) / (1 - self.gamma)
+
+                # Discretize the action for Q-value updates
+                action_index = self.discretize_action(action)
+
+                # Create a new Q array with updated values
+                new_Q = np.copy(self.Q)
+                new_Q[state[0], state[1], action_index] = (1 - alpha) * self.Q[state[0], state[1], action_index] + \
+                                                           alpha * (reward + rho * np.max(self.Q[state_prime[0], state_prime[1], :]))
+
+                self.Q = new_Q  # Assign the new array
+
+                total_reward += reward
+                state = state_prime
+
+            rewards_per_episode.append(total_reward)
+            actions_taken_per_episode.append(actions_taken)
+        return rewards_per_episode, actions_taken_per_episode
+
+    def plot_rewards(self, rewards_per_episode):
+        plt.plot(rewards_per_episode)
+        plt.xlabel('Episode')
+        plt.ylabel('Total Reward')
+        plt.title('Total Reward per Episode (Q-learning)')
+        plt.show()
+
+    def plot_q_values(self):
+        time_values = np.arange(int(self.horizon) + 1)
+        wealth_values = np.arange(int(self.horizon) + 1)
+        mesh_time, mesh_wealth = np.meshgrid(time_values, wealth_values)
+
+        fig = plt.figure(figsize=(12, 6))
+        ax = fig.add_subplot(projection='3d')
+
+        legend_patches = []
+
+        for action_index in range(self.num_actions):
+            surf = ax.plot_surface(mesh_time, mesh_wealth, self.Q[:, :, action_index], label=f'Action {action_index}' )
+            legend_patches.append(mpatches.Patch(color=surf._facecolors[0], label=f'Action {action_index}'))
+        ax.set_xlabel('Time')
+        ax.set_ylabel('Wealth Growth')
+        ax.set_zlabel('Q-value')
+        ax.set_title('Q-values over Time and Wealth Growth')
+        ax.legend(handles=legend_patches)
+        plt.show()
+
+# Parameters
+mu = 0.1
+sigma = 0.1
+r = 0.02
+rho = 0.99
+horizon = 20.0
+gamma =2.0
+
+# Create an instance of MertonPortfolioQlearning
+merton_qlearning = MertonPortfolioQlearning(mu, sigma, r, rho, horizon, gamma, num_actions=2)
+
+# Run Q-learning
+rewards_per_episode , actions_taken_per_episode = merton_qlearning.q_learning()
+
+# Plot rewards
+merton_qlearning.plot_rewards(rewards_per_episode)
+
+# Plot Q-values
+merton_qlearning.plot_q_values()
+
+print("Actions taken in the first episode:", actions_taken_per_episode[0])
